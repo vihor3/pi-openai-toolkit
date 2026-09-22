@@ -31,6 +31,8 @@ export type CodexContextManagementMessageDetails = {
 		protocol: typeof CONTEXT_MANAGEMENT_PROTOCOL;
 		kind: ContextManagementMessageKind;
 		trimPreviousWindow?: true;
+		/** Adopt Pi's visible compacted context before this reentry marker. */
+		preservePriorContext?: true;
 	};
 };
 
@@ -151,8 +153,11 @@ export function isCodexContextManagementMessageDetails(
 	const context = value.contextManagement;
 	if (!isRecord(context)) return false;
 	const trimPreviousWindow = context.trimPreviousWindow;
+	const preservePriorContext = context.preservePriorContext;
 	return (
 		(context.kind === "window" || context.kind === "reminder" || context.kind === "fallback") &&
+		(preservePriorContext === undefined ||
+			(preservePriorContext === true && context.kind === "window" && trimPreviousWindow === undefined)) &&
 		isContextWindowIdentity(context) &&
 		(trimPreviousWindow === undefined || trimPreviousWindow === true)
 	);

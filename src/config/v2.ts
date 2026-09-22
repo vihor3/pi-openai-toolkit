@@ -20,7 +20,8 @@
  * ```
  *
  * Rules:
- * - Precedence is built-ins -> `defaults` -> the exact override of the resolved model.
+ * - Only an exact `models` entry activates Toolkit (including `{}`); defaults are templates.
+ * - Precedence for listed models is built-ins -> `defaults` -> the exact override.
  * - Only known nested objects merge by field; arrays replace; `false` and `0` stay meaningful.
  * - `null` is accepted only for the optional producer/reviewer/classifier model references and
  *   clears an inherited reference. `null` anywhere else is a path-specific error and never
@@ -37,7 +38,7 @@
  * Fail-closed contract for consumers: `policy` always carries the best known value for every
  * leaf, so an invalid present value keeps the inherited or built-in value instead of silently
  * falling through to another route. The blocking signal is `invalidFeatures`, which is scoped to
- * the resolved model: a leaf error in `defaults` marks the owning feature for every model, a
+ * the resolved listed model: a leaf error in `defaults` marks the owning feature for listed models, a
  * leaf error in the resolved model's override marks that feature for that model only, an error
  * in a different model is reported without invalidating the current selection, and a valid exact
  * override shadows an invalid `defaults` leaf. Malformed document sections and unknown
@@ -67,6 +68,7 @@ import {
 	THINKING_LEVELS,
 } from "../types";
 import {
+	applyInactivePolicy,
 	CONFIG_FEATURES,
 	createPolicyDefaults,
 	type ConfigFeature,
@@ -75,6 +77,7 @@ import {
 	type EffectiveToolkitPolicy,
 	type ResolvedToolkitPolicy,
 	type SearchRoute,
+	type ToolkitScope,
 } from "./policy";
 
 /**
@@ -309,6 +312,7 @@ type ResolutionState = {
 	untrusted: boolean;
 	selectedKey: string | undefined;
 	gatewayCandidates: Set<string>;
+	scope: ToolkitScope;
 };
 
 function createState(modelKey: string | undefined): ResolutionState {
@@ -322,6 +326,7 @@ function createState(modelKey: string | undefined): ResolutionState {
 		leaves: new Map(),
 		hardInvalid: new Set(),
 		gatewayCandidates: new Set(),
+		scope: "unknown",
 		untrusted: false,
 		selectedKey: trimmed.length > 0 ? trimmed : undefined,
 	};
@@ -353,6 +358,7 @@ function withModel(scope: Scope, issue: ConfigIssue): ConfigIssue {
 function fatalDocumentError(state: ResolutionState, code: string, path: string): void {
 	state.issues.push({ severity: "error", code, path, feature: "document" });
 	state.untrusted = true;
+	state.scope = "unknown";
 }
 
 /** A value that is present but not usable for the leaf it was written to. */
@@ -1301,6 +1307,8 @@ type V2Resolution = ResolvedToolkitPolicy & { gatewayModelKeys: string[] };
 
 function finish(state: ResolutionState): V2Resolution {
 	const invalidFeatures = CONFIG_FEATURES.filter((feature) => {
+		if (state.scope === "inactive") return false;
+		if (state.scope === "unknown") return true;
 		if (state.untrusted || state.hardInvalid.has(feature)) return true;
 		for (const leaf of state.leaves.values()) {
 			if (leaf.feature !== feature) continue;
@@ -1318,7 +1326,9 @@ function finish(state: ResolutionState): V2Resolution {
 		if (issue.modelKey !== undefined) blockedGateways.add(issue.modelKey);
 		else if (issue.code !== V2_ISSUE.keyInvalid) blockAllGateways = true;
 	}
+	if (state.scope === "inactive") applyInactivePolicy(state.policy, state.origins);
 	return {
+		scope: state.scope,
 		policy: state.policy,
 		origins: state.origins,
 		issues: state.issues,
@@ -1363,6 +1373,19 @@ export function resolveV2Config(raw: unknown, modelKey: string | undefined): V2R
 	applyDefaults(raw, state);
 	applyModels(raw, state);
 	applyDiagnostics(raw, state);
+
+	// Membership is independent of feature validity. Bad defaults or another model's
+	// policy cannot activate/block a known unlisted identity. An unreadable catalog,
+	// malformed key or unknown root, however, cannot prove intentional exclusion.
+	const models = Object.hasOwn(raw, "models") ? raw.models : undefined;
+	const validCatalog = !Object.hasOwn(raw, "models") || isRecord(models);
+	const keys = isRecord(models) ? Object.keys(models).map((key) => key.trim()) : [];
+	const trustedRoot = Object.keys(raw).every((key) => ROOT_KEYS.has(key)) &&
+		(!Object.hasOwn(raw, "$schema") || typeof raw.$schema === "string");
+	if (state.selectedKey && isExactModelKey(state.selectedKey) && validCatalog && trustedRoot) {
+		state.scope = keys.includes(state.selectedKey) ? "active"
+			: keys.every(isExactModelKey) ? "inactive" : "unknown";
+	}
 
 	return finish(state);
 }

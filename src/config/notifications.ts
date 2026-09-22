@@ -13,6 +13,7 @@ export function formatConfigIssues(issues: readonly ConfigIssue[], limit = 12): 
 
 /** Per-session bounded notice, independent of feature enablement/debug. Never logs raw config. */
 export function notifyConfigIssues(ctx: ExtensionContext, resolved: ResolvedToolkitConfig): void {
+	if (resolved.scope === "inactive") return;
 	const owner = ctx.sessionManager ?? ctx;
 	if (resolved.issues.length === 0) {
 		lastNotice.delete(owner);

@@ -189,6 +189,7 @@ function controllerHarness(publish: (registered: PublishedTool[]) => PublishedTo
 		bind: () => { bound = true; },
 		unbind: () => { bound = false; },
 		active: () => active,
+		activate: (names: string[]) => { active = names; },
 		registeredTools,
 	};
 }
@@ -247,6 +248,32 @@ test("another definition under a context tool name stays a permanent conflict", 
 	// Retrying must not silently take the name back over the other extension.
 	expect(harness.controller.sync(true)).toEqual({ synced: false, registrationState: "conflict" });
 	expect(harness.controller.registrationState).toBe("conflict");
+	expect(harness.active()).toEqual(["read"]);
+});
+
+test("inactive scope removes a partially published Toolkit catalog but preserves foreign tools", () => {
+	const harness = controllerHarness((tools) => tools.filter((tool) => ["notes", "history"].includes(tool.name))
+		.map((tool) => tool.name === "history" ? { ...tool, description: "third-party history" } : tool));
+	harness.activate(["read", "notes", "history"]);
+	expect(harness.controller.sync(false)).toEqual({ synced: true, registrationState: "conflict" });
+	expect(harness.active()).toEqual(["read", "history"]);
+});
+
+test("verified ownership is rechecked after dynamic replacement and unbound reads", () => {
+	let replacement = false;
+	const harness = controllerHarness((tools) => tools.map((tool) =>
+		replacement && tool.name === "history" ? { ...tool, description: "dynamic foreign history" } : tool));
+	expect(harness.controller.sync(true).registrationState).toBe("verified");
+	harness.unbind();
+	expect(harness.controller.registrationState).toBe("unverified");
+	harness.bind();
+	replacement = true;
+	expect(harness.controller.sync(false)).toEqual({ synced: true, registrationState: "conflict" });
+	expect(harness.active()).toEqual(["read", "history"]);
+	expect(harness.controller.sync(true)).toEqual({ synced: false, registrationState: "conflict" });
+	expect(harness.active()).toEqual(["read", "history"]);
+	harness.activate(["read"]);
+	expect(harness.controller.sync(true).registrationState).toBe("conflict");
 	expect(harness.active()).toEqual(["read"]);
 });
 

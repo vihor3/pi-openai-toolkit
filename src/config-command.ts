@@ -25,6 +25,7 @@ export function describeToolkitConfig(resolved: ResolvedToolkitConfig): string {
 	const lines = [
 		`Toolkit configuration: ${resolved.source ?? CONFIG_PATH}`,
 		`Format: ${resolved.format}; model: ${resolved.modelKey ?? "not selected"}`,
+		`Toolkit scope: ${resolved.scope}${resolved.scope === "inactive" ? " — native Pi; no Toolkit features" : resolved.scope === "unknown" ? " — cannot establish model scope; fail closed" : resolved.format === "legacy" ? " — legacy global compatibility" : " — exact models entry"}`,
 		`Invalid selected features: ${resolved.invalidFeatures.join(", ") || "none"}`,
 		"Configuration intent only. Tool registration and backend capability are not verified.",
 	];

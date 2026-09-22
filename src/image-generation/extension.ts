@@ -1,6 +1,6 @@
 import { StringEnum, Type, type Static } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { loadToolkitConfig, resolveToolkitConfig } from "../config";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { assertConfigValid, loadToolkitConfig, resolveToolkitConfig } from "../config";
 import { notifyConfigIssues } from "../config/notifications";
 import { executeImageGeneration } from "./service";
 import { isImageGenerationEnabledForModel } from "./eligibility";
@@ -92,7 +92,14 @@ function syncImageGenerationTool(
 	pi: ExtensionAPI,
 	model: Parameters<typeof isImageGenerationEnabledForModel>[0],
 	config: Parameters<typeof isImageGenerationEnabledForModel>[1],
+	definition: ToolDefinition<typeof GenerateImageParameters, ImageGenerationDetails, Record<string, never>>,
 ): void {
+	// Pi can publish an SDK override or a later dynamic registration under this
+	// name. Only the currently published definition establishes our ownership.
+	const published = pi.getAllTools().find((tool) => tool.name === definition.name);
+	if (!published || published.description !== definition.description
+		|| published.parameters !== definition.parameters
+		|| published.promptGuidelines !== definition.promptGuidelines) return;
 	const eligible = isImageGenerationEnabledForModel(model, config);
 	const activeTools = pi.getActiveTools();
 	const active = activeTools.includes(IMAGE_GENERATION_TOOL_NAME);
@@ -111,7 +118,7 @@ export function registerImageGenerationExtension(
 	if (registeredApis.has(pi)) return;
 	registeredApis.add(pi);
 
-	pi.registerTool<typeof GenerateImageParameters, ImageGenerationDetails, Record<string, never>>({
+	const definition: ToolDefinition<typeof GenerateImageParameters, ImageGenerationDetails, Record<string, never>> = {
 		name: IMAGE_GENERATION_TOOL_NAME,
 		label: "OpenAI Generate Image",
 		description:
@@ -130,11 +137,17 @@ export function registerImageGenerationExtension(
 		executionMode: "sequential",
 		async execute(toolCallId, params: GenerateImageToolParams, signal, _onUpdate, ctx) {
 			try {
+				const resolved = resolveToolkitConfig(loadConfig(), ctx.model);
+				assertConfigValid(resolved, "imageGeneration", "compatibility");
+				if (!isImageGenerationEnabledForModel(ctx.model, resolved.config.imageGeneration)) {
+					throw new ImageGenerationError("unsupported-model", "Image generation is not enabled for the current provider/model-id.");
+				}
 				const result = await executeImage({
 					params,
 					toolCallId,
 					signal,
 					ctx,
+					resolvedConfig: resolved,
 				});
 				return {
 					content: [{ type: "text", text: result.text }],
@@ -150,13 +163,14 @@ export function registerImageGenerationExtension(
 			}
 		},
 		renderResult: renderImageGenerationResult,
-	});
+	};
+	pi.registerTool(definition);
 
 	const synchronize = (ctx: Parameters<typeof executeImageGeneration>[0]["ctx"], model = ctx.model) => {
 		const resolved = resolveToolkitConfig(loadConfig(), model);
 		notifyConfigIssues(ctx, resolved);
 		const valid = !resolved.invalidFeatures.some((feature) => feature === "imageGeneration" || feature === "compatibility");
-		syncImageGenerationTool(pi, model, { ...resolved.config.imageGeneration, enabled: valid && resolved.policy.imageGeneration.enabled });
+		syncImageGenerationTool(pi, model, { ...resolved.config.imageGeneration, enabled: valid && resolved.policy.imageGeneration.enabled }, definition);
 	};
 	pi.on("session_start", (_event, ctx) => synchronize(ctx));
 	pi.on("model_select", (event, ctx) => synchronize(ctx, event.model));

@@ -2,13 +2,17 @@ import { describe, expect, test } from "bun:test";
 import { resolveV2Config } from "./v2";
 
 const key = "provider/model";
-const resolve = (raw: unknown, modelKey: string | undefined = key) => resolveV2Config(raw, modelKey);
+// These feature-validation tests exercise an explicitly listed fixture model.
+// Scope boundary tests below call the decoder directly without this opt-in.
+const resolve = (raw: unknown, modelKey: string | undefined = key) => resolveV2Config(
+	raw && typeof raw === "object" && !Array.isArray(raw) ? { models: { [key]: {} }, ...raw } : raw, modelKey,
+);
 
 describe("v2 policy resolution", () => {
 	test("reasoning effort inherits, validates and records exact false overrides", () => {
 		expect(resolve({ schemaVersion: 2 }).policy.reasoning.effortOverride).toBe(false);
 		const raw = { schemaVersion: 2, defaults: { reasoning: { effortOverride: true } },
-			models: { [key]: { reasoning: { effortOverride: false } } } };
+			models: { "other/model": {}, [key]: { reasoning: { effortOverride: false } } } };
 		expect(resolve(raw, "other/model").policy.reasoning.effortOverride).toBe(true);
 		const selected = resolve(raw);
 		expect(selected.policy.reasoning.effortOverride).toBe(false);

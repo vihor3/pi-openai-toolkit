@@ -48,6 +48,23 @@ function requestPayload(effort: string, input: unknown[] = [{ role: "user", cont
 }
 
 describe("codex astra extension wiring", () => {
+	test("unlisted and missing scope suppress version injection and clear effort baselines", () => {
+		const raw = { defaults: { reasoning: { effortOverride: true } }, models: { "openai-codex/gpt-6-astra": {} } };
+		const h = createHarness({ loadConfig: () => v2Fixture(raw) });
+		h.fire("before_provider_request", { payload: requestPayload("medium") });
+		const unlisted = { ...h.ctx, model: codexModel({ provider: "other", api: "openai-responses" }) };
+		expect(h.fire("before_provider_request", { payload: requestPayload("low") }, unlisted)).toBeUndefined();
+		const headers = { authorization: "native" };
+		h.fire("before_provider_headers", { headers }, { ...unlisted, model: codexModel({ provider: "other" }) });
+		expect(headers).toEqual({ authorization: "native" });
+		// Even without model_select, an inactive request retired the old medium baseline.
+		expect(h.fire("before_provider_request", { payload: requestPayload("high") })).toBeUndefined();
+		expect((h.fire("before_provider_request", { payload: requestPayload("low") }) as any).reasoning.effort).toBe("high");
+		const missing = createHarness({ loadConfig: () => ({ config: DEFAULT_TOOLKIT_CONFIG, warnings: [],
+			document: { format: "missing", configPath: "/missing", issues: [] } }) });
+		missing.fire("before_provider_headers", { headers }, { ...missing.ctx, model: codexModel() });
+		expect(headers).toEqual({ authorization: "native" });
+	});
 	for (const api of ["openai-responses", "openai-codex-responses", "openai-completions"]) {
 		for (const enabled of [false, true]) {
 			test(`v2 exact effort override=${enabled} retains API gate for ${api}`, () => {
@@ -69,7 +86,7 @@ describe("codex astra extension wiring", () => {
 
 	test("v2 invalid reasoning skips the rewrite and retires the previous baseline", () => {
 		let raw: Record<string, unknown> = { defaults: { reasoning: { effortOverride: true } } };
-		const h = createHarness({ loadConfig: () => v2Fixture(raw) });
+		const h = createHarness({ loadConfig: () => v2Fixture(raw, ["openai-codex/gpt-6-astra"]) });
 		h.fire("before_provider_request", { payload: requestPayload("medium") });
 		raw = { defaults: { reasoning: { effortOverride: true } }, models: {
 			"openai-codex/gpt-6-astra": { reasoning: { effortOverride: "invalid" } },

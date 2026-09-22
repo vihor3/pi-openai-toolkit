@@ -426,6 +426,14 @@ export function registerWebSearchExtension(
 	}
 
 	function synchronizeResolved(model: WebSearchModel | undefined, resolved: ResolvedToolkitConfig): WebSearchRouteResolution {
+		if (resolved.scope === "inactive") {
+			releaseOwnership(pi, LOCAL_WEB_SEARCH_TOOL_NAME, states.webSearch);
+			// Registration's initial activation belongs to Toolkit, never to the user.
+			if (standaloneRegistrationSucceeded && verifyStandaloneRegistration(pi, standaloneTool) === "verified") {
+				claimAndRemove(pi, WEB_RUN_TOOL_NAME, states.webRun);
+			}
+			return { route: "none", source: "none", modelKey: resolved.modelKey, reason: "unconfigured" };
+		}
 		if (resolved.invalidFeatures.some((feature) => feature === "webSearch" || feature === "compatibility")) {
 			claimAndRemove(pi, LOCAL_WEB_SEARCH_TOOL_NAME, states.webSearch);
 			claimAndRemove(pi, WEB_RUN_TOOL_NAME, states.webRun);
@@ -466,6 +474,10 @@ export function registerWebSearchExtension(
 
 	pi.on("before_provider_request", (event, ctx) => {
 		const resolved = readConfig(ctx.model, ctx);
+		if (resolved.scope === "inactive") {
+			synchronizeResolved(ctx.model, resolved);
+			return undefined;
+		}
 		try { assertConfigValid(resolved, "webSearch", "compatibility"); }
 		catch (error) { abortAndThrow(ctx, error instanceof Error ? error.message : "Invalid Web Search configuration."); }
 		const { config } = resolved;
@@ -492,6 +504,11 @@ export function registerWebSearchExtension(
 		}
 		const resolved = readConfig(ctx.model, ctx);
 		const resolution = synchronizeResolved(ctx.model, resolved);
+		if (resolved.scope === "inactive") {
+			return event.toolName === WEB_RUN_TOOL_NAME && standaloneRegistrationSucceeded &&
+				verifyStandaloneRegistration(pi, standaloneTool) === "verified"
+				? { block: true, reason: "Toolkit Web Search is inactive for this model." } : undefined;
+		}
 		try { assertConfigValid(resolved, "webSearch", "compatibility"); }
 		catch (error) { return { block: true, reason: error instanceof Error ? error.message : "Invalid Web Search configuration." }; }
 		if (event.toolName === LOCAL_WEB_SEARCH_TOOL_NAME) {

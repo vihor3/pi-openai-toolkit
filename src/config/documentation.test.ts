@@ -14,9 +14,13 @@ test("bilingual README examples stay aligned and all documented v2 examples reso
 	for (const file of ["README.md", "README.zh.md", "docs/configuration.md"]) {
 		for (const raw of examples(file)) {
 			if (raw.schemaVersion !== 2) continue; // The one Pi models.json example has separate ownership.
-			for (const key of [undefined, ...Object.keys((raw.models ?? {}) as object)]) {
+			const keys = Object.keys((raw.models ?? {}) as object);
+			expect(keys.length).toBeGreaterThan(0); // Every feature example must actually opt in a model.
+			for (const key of keys) {
+				expect(resolveV2Config(raw, key).scope).toBe("active");
 				expect(resolveV2Config(raw, key).issues).toEqual([]);
 			}
+			expect(resolveV2Config(raw, "unlisted/example").scope).toBe("inactive");
 		}
 	}
 });

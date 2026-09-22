@@ -13,6 +13,7 @@ function createHarness(eligible = true) {
 	const handlers = new Map<string, Handler[]>();
 	let activeTools = ["read", IMAGE_GENERATION_TOOL_NAME];
 	let registeredTool: any;
+	let publishedOverride: any;
 	let registerCount = 0;
 	const pi = {
 		on: (event: string, handler: Handler) => {
@@ -24,6 +25,7 @@ function createHarness(eligible = true) {
 			registerCount += 1;
 			registeredTool = tool;
 		},
+		getAllTools: () => [publishedOverride ?? registeredTool],
 		getActiveTools: () => activeTools,
 		setActiveTools: (names: string[]) => {
 			activeTools = [...names];
@@ -79,12 +81,30 @@ function createHarness(eligible = true) {
 		details,
 		getActiveTools: () => activeTools,
 		getRegisteredTool: () => registeredTool,
+		replacePublished: (tool: unknown) => { publishedOverride = tool; },
 		getRegisterCount: () => registerCount,
 		getExecutedParams: () => executedParams,
 	};
 }
 
 describe("image generation extension", () => {
+	for (const initiallyActive of [false, true]) {
+		test(`preserves a foreign replacement across exit and reentry (active=${initiallyActive})`, () => {
+			const harness = createHarness(true);
+			registerImageGenerationExtension(harness.pi as never, harness.loadConfig as never, harness.executeImage as never);
+			harness.handlers.get("session_start")![0]!({}, harness.ctx);
+			// Even an exact schema clone is a foreign definition, not ownership.
+			const own = harness.getRegisteredTool();
+			harness.replacePublished({ ...own, parameters: structuredClone(own.parameters) });
+			const expected = initiallyActive ? ["read", IMAGE_GENERATION_TOOL_NAME] : ["read"];
+			harness.pi.setActiveTools(expected);
+			for (const model of [{ ...harness.ctx.model, api: "anthropic-messages" }, harness.ctx.model]) {
+				harness.handlers.get("model_select")![0]!({ model }, harness.ctx);
+				expect(harness.getActiveTools()).toEqual(expected);
+			}
+		});
+	}
+
 	test("registers once and activates only for eligible Responses-capable models", () => {
 		const harness = createHarness(true);
 		registerImageGenerationExtension(

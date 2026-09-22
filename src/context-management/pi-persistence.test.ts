@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
-import type { AgentSession, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 import {
 	createAgentSession,
 	DefaultResourceLoader,
@@ -22,6 +22,96 @@ import {
 import { CODEX_CONTEXT_WINDOW_MESSAGE_TYPE } from "./messages";
 import { createContextManagementTools } from "./tools";
 import { CodexContextWindowManager } from "./window-manager";
+
+for (const retainOldBoundary of [false, true]) {
+	test(`native compaction reentry preserves Pi context across navigation/restart (retain boundary=${retainOldBoundary})`, async () => {
+		const sm = SessionManager.inMemory("/synthetic-project");
+		const sessionId = sm.getSessionId();
+		sm.appendMessage({ role: "user", content: "RETIRED-OLD-HISTORY", timestamp: 1 });
+		const oldMarker = sm.appendCustomMessageEntry(CODEX_CONTEXT_WINDOW_MESSAGE_TYPE, "old window", true, {
+			protocol: 1, id: "old-marker", sessionId,
+			contextManagement: { protocol: 1, kind: "window", firstWindowId: "w0", currentWindowId: "w1",
+				windowNumber: 1, trimPreviousWindow: true },
+		});
+		const retainedUser = sm.appendMessage({ role: "user", content: "NATIVE-RETAINED-USER", timestamp: 2 });
+		const beforeCompact = sm.appendMessage(fauxAssistantMessage("NATIVE-RETAINED-ASSISTANT"));
+		const ctx = { sessionManager: sm } as unknown as ExtensionContext;
+		const pi = { sendMessage: (message: any) => {
+			sm.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+		} } as unknown as ExtensionAPI;
+		const manager = new CodexContextWindowManager(async () => undefined);
+		manager.synchronize(ctx);
+		expect(manager.hasPendingTrim()).toBe(true);
+		const compactId = sm.appendCompaction("NATIVE-SUMMARY", retainOldBoundary ? oldMarker : retainedUser, 1000);
+		const compactedView = sm.buildSessionContext().messages;
+		const restartedSm = SessionManager.inMemory("/synthetic-project", { id: sessionId }, structuredClone(sm.getBranch()));
+		const restarted = new CodexContextWindowManager();
+		restarted.ensureInitialized({ sendMessage: (message: any) => {
+			restartedSm.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+		} } as unknown as ExtensionAPI, { sessionManager: restartedSm } as unknown as ExtensionContext, true);
+		expect(restarted.currentIdentity()?.windowNumber).toBe(2);
+		expect(restarted.hasPendingTrim()).toBe(false);
+		expect(restarted.project(restartedSm.buildSessionContext().messages, "remote").slice(0, compactedView.length)).toEqual(compactedView);
+		manager.synchronize(ctx);
+		expect(manager.currentIdentity()).toBeUndefined();
+		expect(manager.hasPendingTrim()).toBe(false);
+		manager.ensureInitialized(pi, ctx, true);
+		const reentryLeaf = sm.getLeafId()!;
+		const identity = manager.currentIdentity()!;
+		expect(identity.windowNumber).toBe(2);
+		expect(identity.currentWindowId).not.toBe("w1");
+		expect(manager.hasPendingTrim()).toBe(false);
+		const reentryView = sm.buildSessionContext().messages;
+		expect(manager.project(reentryView, "remote")).toEqual(reentryView);
+		expect(reentryView.slice(0, compactedView.length)).toEqual(compactedView);
+		expect(JSON.stringify(reentryView)).not.toContain("RETIRED-OLD-HISTORY");
+		const fresh = new CodexContextWindowManager();
+		fresh.ensureInitialized(pi, ctx, true);
+		expect(sm.getLeafId()).toBe(reentryLeaf);
+		expect(fresh.currentIdentity()).toEqual(identity);
+		expect(fresh.project(sm.buildSessionContext().messages, "remote")).toEqual(reentryView);
+
+		// Both sides of native compaction, plus the new marker, replay independently.
+		sm.branch(beforeCompact);
+		manager.synchronize(ctx);
+		expect(manager.currentIdentity()?.currentWindowId).toBe("w1");
+		expect(manager.hasPendingTrim()).toBe(true);
+		sm.branch(compactId);
+		manager.synchronize(ctx);
+		expect(manager.currentIdentity()).toBeUndefined();
+		expect(manager.hasPendingTrim()).toBe(false);
+		sm.branch(reentryLeaf);
+		manager.synchronize(ctx);
+		expect(manager.currentIdentity()).toEqual(identity);
+		expect(manager.hasPendingTrim()).toBe(false);
+		expect(manager.project(sm.buildSessionContext().messages, "remote")).toEqual(reentryView);
+
+		// An actual subsequent rollover restores the ordinary trimming contract.
+		await manager.startNewWindow(pi, ctx, { triggerTurn: false, trimPreviousWindow: true });
+		const projected = manager.project(sm.buildSessionContext().messages, "remote");
+		expect(JSON.stringify(projected)).not.toContain("NATIVE-SUMMARY");
+		expect(JSON.stringify(projected)).not.toContain("NATIVE-RETAINED-USER");
+		expect(manager.hasPendingTrim()).toBe(true);
+		expect(manager.currentIdentity()?.windowNumber).toBe(3);
+	});
+}
+
+test("replaying older native compaction retains a newer in-flight rollover guard", async () => {
+	const sm = SessionManager.inMemory("/synthetic-project");
+	const kept = sm.appendMessage({ role: "user", content: "native work", timestamp: 1 });
+	sm.appendCompaction("native summary", kept, 10);
+	const ctx = { sessionManager: sm } as unknown as ExtensionContext;
+	const manager = new CodexContextWindowManager(async () => undefined);
+	const pi = { sendMessage: () => undefined } as unknown as ExtensionAPI;
+	await manager.startNewWindow(pi, ctx, { triggerTurn: false, trimPreviousWindow: true });
+	manager.restore(sm.getBranch(), sm.getSessionId());
+	expect(manager.hasPendingRollover(ctx)).toBe(true);
+	expect(await manager.startNewWindow(pi, ctx, { triggerTurn: false, trimPreviousWindow: true })).toBe(false);
+	// A genuinely subsequent native compaction can supersede that pending work.
+	sm.appendCompaction("new native summary", kept, 10);
+	manager.synchronize(ctx);
+	expect(manager.hasPendingRollover(ctx)).toBe(false);
+});
 
 for (const callback of ["absent", "before-sync", "after-sync"] as const) {
 	for (const syncBeforeNavigation of [false, true]) {

@@ -49,7 +49,7 @@ export type EffectiveToolkitPolicy = {
 	diagnostics: DiagnosticsConfig;
 };
 export type ConfigOrigin = {
-	kind: "builtin" | "defaults" | "model" | "legacy";
+	kind: "builtin" | "defaults" | "model" | "legacy" | "inactive";
 	path?: string;
 	source?: string;
 };
@@ -62,7 +62,11 @@ export type ConfigIssue = {
 	/** Issues for a different model do not invalidate the selected model. */
 	modelKey?: string;
 };
+export type ToolkitScope = "active" | "inactive" | "unknown";
+
 export type ResolvedToolkitPolicy = {
+	/** Unknown scope must fail closed; only known inactive scope permits native passthrough. */
+	scope: ToolkitScope;
 	policy: EffectiveToolkitPolicy;
 	origins: Record<string, ConfigOrigin>;
 	issues: ConfigIssue[];
@@ -79,7 +83,27 @@ export const CONFIG_FEATURES: readonly ConfigFeature[] = [
 	"reasoning", "context", "webSearch", "imageGeneration", "autoMode", "compatibility", "diagnostics",
 ];
 
-/** Independent per-operation defaults, preserving the existing shipped policy. */
+/** Apply native-Pi effective switches while retaining templates/references for inspection. */
+export function applyInactivePolicy(policy: EffectiveToolkitPolicy, origins: Record<string, ConfigOrigin>): void {
+	policy.reasoning.effortOverride = false;
+	policy.context.mode = "pi";
+	policy.context.nativeFallback.enabled = false;
+	policy.webSearch.route = "unmanaged";
+	policy.imageGeneration.enabled = false;
+	policy.autoMode.available = false;
+	policy.autoMode.classifier.enabled = false;
+	policy.compatibility.transport = "standard";
+	policy.diagnostics.notifyOnLoad = false;
+	policy.diagnostics.captureRequests = false;
+	policy.diagnostics.captureResponses = false;
+	for (const leaf of ["reasoning.effortOverride", "context.mode", "context.nativeFallback.enabled", "webSearch.route",
+		"imageGeneration.enabled", "autoMode.available", "autoMode.classifier.enabled", "compatibility.transport",
+		"diagnostics.notifyOnLoad", "diagnostics.captureRequests", "diagnostics.captureResponses"]) {
+		origins[leaf] = { kind: "inactive" };
+	}
+}
+
+/** Independent per-operation defaults for explicitly activated models. */
 export function createPolicyDefaults(): EffectiveToolkitPolicy {
 	const context = DEFAULT_COMPACTION_CONFIG;
 	const auto = structuredClone(DEFAULT_AUTO_MODE_CONFIG);

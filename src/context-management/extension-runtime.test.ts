@@ -678,7 +678,7 @@ test("v2 context lifecycle reads one snapshot across awaited activation and sees
 		getAllTools: () => registered, getActiveTools: () => active,
 		setActiveTools: (tools: string[]) => { active = tools; }, sendMessage: () => true,
 	};
-	extension(pi as never, { loadConfig: () => { reads++; return v2Fixture(raw); } });
+	extension(pi as never, { loadConfig: () => { reads++; return v2Fixture(raw, ["openai-codex/gpt-5.5"]); } });
 	const ctx = makeContext() as any;
 	ctx.modelRegistry.getApiKeyAndHeaders = async () => {
 		raw = { defaults: { context: { mode: "pi" } } };

@@ -91,7 +91,7 @@ export function sendContextWindowMessage(
 	content: string,
 	kind: ContextManagementMessageKind,
 	identity: ContextWindowIdentity,
-	options: { triggerTurn: boolean; sessionId?: string },
+	options: { triggerTurn: boolean; sessionId?: string; preservePriorContext?: boolean },
 	trimPreviousWindow = false,
 ): void {
 	const details: CodexContextManagementMessageDetails = {
@@ -103,6 +103,7 @@ export function sendContextWindowMessage(
 			kind,
 			...identity,
 			...(trimPreviousWindow ? { trimPreviousWindow: true as const } : {}),
+			...(options.preservePriorContext ? { preservePriorContext: true as const } : {}),
 		},
 	};
 	pi.sendMessage({

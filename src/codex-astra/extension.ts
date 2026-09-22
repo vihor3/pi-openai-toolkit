@@ -116,6 +116,8 @@ export function registerCodexAstraExtension(
 		try {
 			const model = ctx.model;
 			if (!model || model.api !== "openai-codex-responses") return;
+			const resolved = resolveToolkitConfig(loadConfig(), model);
+			if (resolved.scope !== "active" || resolved.invalidFeatures.includes("compatibility")) return;
 			// Live requests need the same backend version gate as our synthetic
 			// ones: an old or missing `version` never reaches gated SKUs.
 			if (!event.headers.version) {

@@ -46,6 +46,7 @@ interface StartContextWindowOptions {
 	triggerTurn: boolean;
 	signal?: AbortSignal;
 	trimPreviousWindow: boolean;
+	preservePriorContext?: boolean;
 	/** Captured with the tool activation policy, before any awaited backend work. */
 	gatewayModels?: readonly string[];
 }
@@ -68,6 +69,7 @@ type WindowBoundaryEntry = Extract<SessionEntry, { type: "custom_message" }> & {
  */
 type PendingRollover = {
 	sessionId?: string;
+	sourceCompactionId?: string;
 	targetWindowId: string;
 };
 
@@ -157,7 +159,16 @@ export class CodexContextWindowManager {
 		for (const entry of entries) {
 			if (entry.type === "compaction") {
 				this.restoredCompactionId = entry.id;
-				this.recordCompaction(entry.details);
+				if (isContextWindowCompactionDetails(entry.details)) {
+					this.recordCompaction(entry.details);
+				} else {
+					// Native compaction replaces the managed request view. Older
+					// durable markers cannot restore its identity or uncommitted trim.
+					this.identity = undefined;
+					this.trimPendingWindowId = undefined;
+					this.budget.reset();
+					this.lastKnownSystemHead = undefined;
+				}
 				continue;
 			}
 			if (entry.type !== "custom_message" || entry.customType !== CODEX_CONTEXT_WINDOW_MESSAGE_TYPE) continue;
@@ -177,6 +188,12 @@ export class CodexContextWindowManager {
 		// recordCompaction may invalidate the cache while replaying entries; the
 		// completed replay already reconciled those acknowledgments with this branch.
 		this.branchStateInvalidated = false;
+		// Only a newer durable native compaction can supersede an in-flight
+		// rollover. Replaying an older compaction must retain its duplicate guard.
+		if (!this.identity && this.restoredCompactionId !== undefined && this.pendingRollover
+			&& this.pendingRollover.sourceCompactionId !== this.restoredCompactionId) {
+			this.pendingRollover = undefined;
+		}
 		this.retireSatisfiedOrStalePending(entries, sessionId);
 	}
 
@@ -225,11 +242,21 @@ export class CodexContextWindowManager {
 		this.synchronize(ctx);
 		if (this.identity) return;
 		const windowId = randomUUID();
+		// With no live identity after compaction, the prior boundary supplies only
+		// the sequence number. Never reuse its backend session:number or its trim.
+		const prior = this.restoredCompactionId
+			? findLatestWindowBoundaryEntry(ctx.sessionManager.getBranch(), this.sessionId)?.details.contextManagement
+			: undefined;
 		this.sendWindowMessage(
 			pi,
 			ctx,
-			{ firstWindowId: windowId, currentWindowId: windowId, windowNumber: 0 },
-			{ triggerTurn: false, trimPreviousWindow: false },
+			{
+				firstWindowId: prior?.firstWindowId ?? windowId,
+				currentWindowId: windowId,
+				...(prior ? { previousWindowId: prior.currentWindowId } : {}),
+				windowNumber: prior ? prior.windowNumber + 1 : 0,
+			},
+			{ triggerTurn: false, trimPreviousWindow: false, preservePriorContext: this.restoredCompactionId !== undefined },
 		);
 	}
 
@@ -243,6 +270,7 @@ export class CodexContextWindowManager {
 			);
 		}
 		let boundaryIndex = -1;
+		let preservePriorContext = false;
 		for (let index = 0; index < messages.length; index += 1) {
 			const message = messages[index]!;
 			if (
@@ -257,6 +285,7 @@ export class CodexContextWindowManager {
 			}
 			if (!isContextWindowBoundary(message)) continue;
 			boundaryIndex = index;
+			preservePriorContext = message.details.contextManagement.preservePriorContext === true;
 			this.identity = identityFromDetails(message.details);
 		}
 		if (boundaryIndex < 0) {
@@ -267,7 +296,9 @@ export class CodexContextWindowManager {
 		}
 		// Projection observes the request view, never durable session state. A
 		// queued rollover marker must not clear the duplicate guard here.
-		const trimmed = boundaryIndex < 0 ? [...messages] : this.trimToWindow(messages, boundaryIndex);
+		// A reentry marker adopts only the context Pi supplied (summary + retained
+		// messages), not the retired durable branch. Ordinary rollovers still trim.
+		const trimmed = boundaryIndex < 0 || preservePriorContext ? [...messages] : this.trimToWindow(messages, boundaryIndex);
 		return mode === "remote" ? projectEncryptedToolResults(trimmed) : trimmed;
 	}
 
@@ -324,7 +355,7 @@ export class CodexContextWindowManager {
 				windowNumber: current.windowNumber + 1,
 			}
 			: { firstWindowId: currentWindowId, currentWindowId, windowNumber: 0 };
-		this.pendingRollover = { sessionId: liveSessionId, targetWindowId: currentWindowId };
+		this.pendingRollover = { sessionId: liveSessionId, sourceCompactionId: this.restoredCompactionId, targetWindowId: currentWindowId };
 		try {
 			const checkpoint = current
 				? findLatestNotesCheckpointSinceBoundary(ctx.sessionManager.getBranch(), liveSessionId)
@@ -484,7 +515,7 @@ export class CodexContextWindowManager {
 			renderContextWindowMessage(identity, threadHint, checkpoint),
 			"window",
 			identity,
-			{ triggerTurn: options.triggerTurn, sessionId: ctx.sessionManager.getSessionId() },
+			{ triggerTurn: options.triggerTurn, sessionId: ctx.sessionManager.getSessionId(), preservePriorContext: options.preservePriorContext },
 			options.trimPreviousWindow,
 		);
 		this.identity = identity;

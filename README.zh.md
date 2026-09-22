@@ -29,7 +29,7 @@ pi install npm:pi-openai-toolkit
 
 在当前项目中安装扩展时加上 `--local`。Toolkit 策略仍然只使用全局配置，不支持项目配置或环境变量策略覆盖。
 
-没有配置文件时，符合条件的模型启用远程压缩 v2，远程上下文窗口关闭，搜索不由 Toolkit 管理，图像生成关闭，自动模式不可用。这些默认值不表示后端能力已经验证。
+没有配置文件时，Toolkit 不激活，Pi 保持原生行为。v2 仅对 `models` 中明确列出的精确模型键激活 Toolkit，空对象 `{}` 也算显式配置。`defaults` 只是这些已列出模型共享的模板，不会激活其他模型；不同提供商下的同名模型仍是独立的键。
 
 Toolkit 唯一的配置文件是：
 
@@ -50,6 +50,9 @@ Toolkit 唯一的配置文件是：
   "schemaVersion": 2,
   "defaults": {
     "context": { "mode": "remote-windows" }
+  },
+  "models": {
+    "openai-codex/<model-id>": {}
   }
 }
 ```
@@ -60,7 +63,7 @@ Toolkit 唯一的配置文件是：
 pi --model openai-codex/<model-id>
 ```
 
-将 `<model-id>` 换成 Pi 配置中实际显示的模型 ID。会话中出现 `new_context`、`get_context_remaining`、`history` 和 `notes`，说明已经激活；这不代表已完成后端往返验证。
+将配置和命令中的 `<model-id>` 都换成 Pi 配置中实际显示的模型 ID。会话中出现 `new_context`、`get_context_remaining`、`history` 和 `notes`，说明已经激活；这不代表已完成后端往返验证。
 
 ### 使用兼容网关
 
@@ -126,7 +129,18 @@ pi --model my-gateway/gpt-5.6-luna
 
 ### 使用服务端压缩继续会话
 
-使用 `context.mode: "remote-compaction"` 选择 Responses 压缩路径（默认值），或设为 `"pi"` 交回 Toolkit 的上下文管理权。只有需要独立模型生成检查点时才设置 `context.remoteCompaction.model`。这些字段放在 `defaults` 或精确的 `models` 覆盖下。
+使用 `context.mode: "remote-compaction"` 选择 Responses 压缩路径（已列出模型的默认值），或设为 `"pi"` 交回 Toolkit 的上下文管理权。只有需要独立模型生成检查点时才设置 `context.remoteCompaction.model`。这些字段放在 `defaults` 或精确的 `models` 覆盖下。空对象条目表示使用内置默认值：
+
+```json
+{
+  "schemaVersion": 2,
+  "models": {
+    "your-provider/your-model": {}
+  }
+}
+```
+
+切换到未列出的模型时，Toolkit 停止拦截，禁用自身工具，恢复第三方搜索工具的原有状态，并将上下文和压缩交给 Pi，不触发 Toolkit 的收尾压缩请求。已有持久化历史保持不变；退出范围无法恢复已被持久化摘要或不透明检查点替代的原始内容，Toolkit 也不会在未激活路径回放该检查点。返回已列出的模型后恢复功能可用性，自动模式仍需再次显式开启。
 
 `context.remoteCompaction.inputSource` 默认为 `"legacy"`：首次压缩使用 Pi 当前会话上下文，最后才回退到事件提供的数据；递归压缩使用原始分支尾部。这保留了既有行为，但当其他扩展改写消息时，可能与提供商实际看到的上下文不同。
 
@@ -134,7 +148,7 @@ pi --model my-gateway/gpt-5.6-luna
 
 ### 选择联网搜索路由
 
-设置全局默认值和精确模型覆盖：
+为已列出的模型设置共享默认值和精确覆盖：
 
 ```json
 {
@@ -159,7 +173,7 @@ pi --model my-gateway/gpt-5.6-luna
 
 ### 生成图片
 
-图像生成需要 Responses 会话，并且可能产生服务商费用。全局启用方式如下：
+图像生成需要已列出的 Responses 会话，并且可能产生服务商费用。输出模型策略在已列出的模型间共享：
 
 ```json
 {
@@ -170,13 +184,16 @@ pi --model my-gateway/gpt-5.6-luna
       "defaultModel": "gpt-image-2.5",
       "allowedModels": ["gpt-image-2.5", "grok-imagine-image-2.0"]
     }
+  },
+  "models": {
+    "my-gateway/gpt-5.6-luna": {}
   }
 }
 ```
 
 这里填写嵌套 Responses `image_generation` 工具使用的裸输出模型 ID。列表顺序不决定默认模型。`defaultModel` 必须属于非空的 `allowedModels` 列表，单次调用的可选 `model` 也必须在列表中。无效策略或不允许的选择会在认证、参考图上传及付费请求前被拒绝。提供商必须支持所选模型。
 
-`openai_generate_image` 支持文生图和使用明确传入的本地参考图进行编辑。生图策略不能按当前会话模型覆盖。
+`openai_generate_image` 支持文生图和使用明确传入的本地参考图进行编辑。生图输出策略不能按当前会话模型覆盖，但工具暴露和执行仍要求当前模型有精确的 `models` 条目。输出模型 ID、压缩生成模型和审查模型引用都不会自动激活对话模型。
 
 ### 启用工具调用自动审查
 
@@ -219,7 +236,7 @@ TUI 会显示开启提示、审查活动和底部状态。兼容的 Pi 工具渲
 
 ## 常用配置
 
-全局文件按内置值、`defaults`、精确 `models["provider/model-id"]` 的顺序解析。缺失字段继承，数组整体替换，`false` 和 `0` 保持含义。支持的可选模型引用可以用 `null` 清除继承。默认值不是总开关：精确覆盖可以开启默认关闭的功能。
+对于 `models` 中明确列出的模型，全局文件按内置值、`defaults`、精确 `models["provider/model-id"]` 的顺序解析。缺失字段继承，数组整体替换，`false` 和 `0` 保持含义。支持的可选模型引用可以用 `null` 清除继承。默认值不是总开关：精确覆盖可以开启默认关闭的功能。
 
 | 配置项 | 默认值 | 用途 |
 | --- | --- | --- |
@@ -239,9 +256,11 @@ TUI 会显示开启提示、审查活动和底部状态。兼容的 Pi 工具渲
 | `diagnostics.level` | `"info"` | `"debug"` 开启调试产物。 |
 | `diagnostics.captureRequests` / `captureResponses` | `false` | 分别开启请求或压缩响应捕获。 |
 
-使用 `/toolkit-config` 查看有效值及来源，`/toolkit-config validate` 查看文档问题，`/toolkit-config migration-preview` 预览只读的旧格式迁移候选。这些命令需要 UI，不查询网络或认证，不激活工具，也不写文件。选中配置不表示后端支持已验证。
+无版本号的旧格式保留原有的全局作用范围。迁移预览保留所有明确配置的旧模型键，即使其覆盖值等于默认值，并提示 v2 缩小作用范围的变化，供审查。
 
-未知 v2 策略键和畸形值会产生可见的分范围错误，不依赖调试模式。每个公开回调或工具执行及其等待的辅助操作使用同一份不可变快照，后续操作重新读取文件；独立 Pi 事件之间不保证原子事务。完整选项见[配置参考](docs/configuration.md)和[编辑器 schema](config.schema.json)。
+使用 `/toolkit-config` 查看激活范围、有效值及来源，`/toolkit-config validate` 查看文档问题，`/toolkit-config migration-preview` 预览只读的旧格式迁移候选。这些命令需要 UI，不查询网络或认证，不激活工具，也不写文件。选中配置不表示后端支持已验证。
+
+未知 v2 策略键和畸形值会产生分范围错误。已确认未列出的模型仍保持 Pi 原生行为，即使默认值或其他模型的功能策略无效；`/toolkit-config validate` 仍会报告这些问题。未知或无法读取的范围不视为退出，会保留失败时阻止操作的行为，包括已开启的审批门禁。每个公开回调或工具执行及其等待的辅助操作使用同一份不可变快照，后续操作重新读取文件；独立 Pi 事件之间不保证原子事务。完整选项见[配置参考](docs/configuration.md)和[编辑器 schema](config.schema.json)。
 
 ## 开发
 

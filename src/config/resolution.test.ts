@@ -19,7 +19,7 @@ const model = { provider: "p", id: "m", api: "openai-responses" };
 
 for (const enabled of [true, false]) {
 	test(`legacy effort=${enabled} survives resolution and read-only v2 migration`, () => {
-		const file = fixture({ reasoning_effort_override: enabled });
+		const file = fixture({ reasoning_effort_override: enabled, webSearch: { routes: { "p/m": "local" } } });
 		const bytes = fs.readFileSync(file, "utf8");
 		const loaded = loadToolkitConfig(file);
 		const resolved = resolveToolkitConfig(loaded, model);
@@ -27,7 +27,7 @@ for (const enabled of [true, false]) {
 		expect(resolved.policy.reasoning.effortOverride).toBe(enabled);
 		expect(resolved.origins["reasoning.effortOverride"]).toEqual({ kind: "legacy", path: "reasoning_effort_override", source: file });
 		const preview = previewToolkitMigration(loaded);
-		expect(preview.status).toBe("ready");
+		expect(preview.status).toBe("needs-review");
 		expect(preview.candidate).toMatchObject({ defaults: { reasoning: { effortOverride: enabled } } });
 		expect(preview.origins?.["defaults.reasoning.effortOverride"]?.path).toBe("reasoning_effort_override");
 		const migrated = resolveToolkitConfig(loadToolkitConfig(fixture(preview.candidate)), model);
@@ -56,9 +56,9 @@ test("real loader exposes v2 provenance and anchors relative paths to the global
 });
 
 test("one loaded snapshot survives file edits while the next load observes them", () => {
-	const file = fixture({ schemaVersion: 2, defaults: { webSearch: { route: "hosted" } } });
+	const file = fixture({ schemaVersion: 2, models: { "p/m": {} }, defaults: { webSearch: { route: "hosted" } } });
 	const snapshot = loadToolkitConfig(file);
-	fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, defaults: { webSearch: { route: "local" } } }));
+	fs.writeFileSync(file, JSON.stringify({ schemaVersion: 2, models: { "p/m": {} }, defaults: { webSearch: { route: "local" } } }));
 	const first = resolveToolkitConfig(snapshot, model);
 	expect(first.policy.webSearch.route).toBe("hosted");
 	expect(Object.isFrozen(first.policy.webSearch)).toBe(true);
@@ -106,8 +106,8 @@ test("valid legacy hosted failure behavior remains permissive and migration flag
 
 test("explicit local and unmanaged retain different payload behavior", () => {
 	const payload = { tools: [{ type: "web_search" }, { type: "function", name: "web_run" }, { type: "function", name: "read" }] };
-	const unmanaged = resolveToolkitConfig(loadToolkitConfig(fixture({ schemaVersion: 2, defaults: { webSearch: { route: "unmanaged" } } })), model);
-	const local = resolveToolkitConfig(loadToolkitConfig(fixture({ schemaVersion: 2, defaults: { webSearch: { route: "local" } } })), model);
+	const unmanaged = resolveToolkitConfig(loadToolkitConfig(fixture({ schemaVersion: 2, models: { "p/m": {} }, defaults: { webSearch: { route: "unmanaged" } } })), model);
+	const local = resolveToolkitConfig(loadToolkitConfig(fixture({ schemaVersion: 2, models: { "p/m": {} }, defaults: { webSearch: { route: "local" } } })), model);
 	expect(transformWebSearchPayload({ model, config: unmanaged.config.webSearch, payload }).payload).toBe(payload);
 	expect(transformWebSearchPayload({ model, config: local.config.webSearch, payload }).payload).toEqual({ tools: [{ type: "function", name: "read" }] });
 });
@@ -127,7 +127,7 @@ test("simple migration preview retains provenance mode and explicit image defaul
 		compaction: { remoteV2ContextSource: "legacy", remoteCompactModel: "p/producer", nativeFallback: { model: "p/fallback" } },
 		webSearch: { defaultRoute: "local" }, imageGeneration: { models: ["first", "second"] },
 	})));
-	expect(preview.status).toBe("ready");
+	expect(preview.status).toBe("needs-review");
 	expect(preview.candidate).toMatchObject({ schemaVersion: 2, defaults: {
 		context: { remoteCompaction: { inputSource: "legacy", model: "p/producer" }, nativeFallback: { model: "p/fallback" } },
 		imageGeneration: { defaultModel: "first", allowedModels: ["first", "second"] },
@@ -148,7 +148,7 @@ test("migration normalizes legacy route keys before building the candidate and r
 	const loaded = loadToolkitConfig(fixture({ webSearch: { routes: { " p/m ": "local" } } }));
 	expect(loaded.config.webSearch.routes).toEqual({ "p/m": "local" });
 	const preview = previewToolkitMigration(loaded);
-	expect(preview.status).toBe("ready");
+	expect(preview.status).toBe("needs-review");
 	expect(preview.candidate).toMatchObject({ models: { "p/m": { webSearch: { route: "local" } } } });
 	expect(preview.origins?.['models["p/m"].webSearch.route'].path).toBe('webSearch.routes[" p/m "]');
 });

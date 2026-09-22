@@ -6,6 +6,7 @@ import { resolveWebSearchRoute, type WebSearchModel } from "./web-search/types";
 import { CONFIG_PATH, normalizeLegacyConfig } from "./config/legacy";
 import { resolveV2Config } from "./config/v2";
 import {
+	applyInactivePolicy,
 	CONFIG_FEATURES,
 	createPolicyDefaults,
 	type ConfigDocumentSnapshot,
@@ -248,7 +249,8 @@ function fromLegacy(loaded: LoadedToolkitConfig, model: WebSearchModel | undefin
 			? { kind: "legacy", path: input, source: loaded.source } : { kind: "builtin" };
 	}
 	const issues = [...(loaded.document?.issues ?? []), ...legacyIssues(loaded, modelKey)];
-	return { policy, origins, issues, invalidFeatures: selectedInvalidFeatures(issues, modelKey) };
+	return { scope: loaded.document?.format === "invalid" ? "unknown" : "active",
+		policy, origins, issues, invalidFeatures: selectedInvalidFeatures(issues, modelKey) };
 }
 
 /** Internal engine adapter. All interpretation of document names stays in this module. */
@@ -299,12 +301,16 @@ export function resolveToolkitConfig(loaded: LoadedToolkitConfig, model?: ExactM
 	const v2 = format === "v2" ? resolveV2Config(loaded.document?.raw, modelKey) : undefined;
 	const resolution = v2 ?? fromLegacy(loaded, model);
 	const source = loaded.source;
+	if (format === "missing") {
+		resolution.scope = "inactive";
+		applyInactivePolicy(resolution.policy, resolution.origins);
+	}
 	if (format === "v2") {
 		resolution.policy.diagnostics.artifactRoot = configuredPath(resolution.policy.diagnostics.artifactRoot, loaded.document?.configPath ?? CONFIG_PATH);
-		for (const origin of Object.values(resolution.origins)) if (origin.kind !== "builtin") origin.source = source;
+		for (const origin of Object.values(resolution.origins)) if (origin.kind !== "builtin" && origin.kind !== "inactive") origin.source = source;
 	}
 	const gatewayModelKeys = v2 ? v2.gatewayModelKeys : [...loaded.config.compaction.gatewayContextModels];
-	const config = format === "v2" ? engineConfig(resolution.policy, modelKey, gatewayModelKeys) : structuredClone(loaded.config);
+	const config = format === "v2" || resolution.scope === "inactive" ? engineConfig(resolution.policy, modelKey, gatewayModelKeys) : structuredClone(loaded.config);
 	return freeze({ ...resolution, config, format, source, modelKey, gatewayModelKeys, snapshot: structuredClone(loaded) });
 }
 

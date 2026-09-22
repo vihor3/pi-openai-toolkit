@@ -46,6 +46,16 @@ function runSmoke(args: string[], command = process.execPath) {
 }
 
 describe("pi smoke", () => {
+	test("model scope preserves SDK and dynamically replaced foreign tool ownership", () => {
+		const result = runSmoke([join(import.meta.dir, "pi-model-scope-ownership-runner.ts")]);
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout.trim()).toBe("OK");
+	}, 40000);
+	test("explicit model scope returns a switched session to bare Pi request and compaction behavior", () => {
+		const result = runSmoke([join(import.meta.dir, "pi-model-scope-runner.ts")]);
+		expect(result.status, result.stderr).toBe(0);
+		expect(result.stdout.trim()).toBe("OK");
+	}, 40000);
 	for (const entry of ["dist/cli.js", "dist/bundle/cli.js"]) {
 		test(`standalone exclusion works through the actual Pi ${entry} entrypoint`, () => {
 			const result = runSmoke([

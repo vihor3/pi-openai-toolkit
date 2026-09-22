@@ -846,7 +846,7 @@ for (const boundary of ["before_agent_start", "tool_call", "tool_result", "model
 		let settleNew!: (text: string) => void;
 		const old = new Promise<string>((resolve) => { settleOld = resolve; });
 		const next = new Promise<string>((resolve) => { settleNew = resolve; });
-		const h = createHarness({ flagValue: true, loadConfig: () => v2Fixture(raw), classifierResponses: [old, next] });
+		const h = createHarness({ flagValue: true, loadConfig: () => v2Fixture(raw, ["uwoacrimson/gpt-5.6-luna"]), classifierResponses: [old, next] });
 		h.fire("session_start");
 		await h.fire("tool_call", bashCall);
 		h.fire("tool_result", bashCall);
@@ -874,7 +874,7 @@ for (const boundary of ["before_agent_start", "tool_call", "tool_result", "model
 test("invalid v2 auto policy preserves an engaged blocking gate across later lifecycle operations", async () => {
 	let raw: Record<string, unknown> = { defaults: { autoMode: { available: true, reviewerModel: "p/reviewer", evidenceTools: false, classifier: { enabled: false } } } };
 	let reads = 0;
-	const harness = createHarness({ flagValue: true, loadConfig: () => { reads++; return v2Fixture(raw); } });
+	const harness = createHarness({ flagValue: true, loadConfig: () => { reads++; return v2Fixture(raw, ["uwoacrimson/gpt-5.6-luna"]); } });
 	harness.fire("session_start");
 	expect(reads).toBe(1);
 	await harness.fire("tool_call", bashCall);
@@ -892,10 +892,52 @@ test("invalid v2 auto policy preserves an engaged blocking gate across later lif
 
 test("--auto with malformed v2 policy blocks immediately in headless sessions", async () => {
 	const harness = createHarness({ flagValue: true, hasUI: false,
-		loadConfig: () => v2Fixture({ defaults: { autoMode: { reviewerModel: 42 } } }),
+		loadConfig: () => v2Fixture({ defaults: { autoMode: { reviewerModel: 42 } } }, ["uwoacrimson/gpt-5.6-luna"]),
 	});
 	harness.fire("session_start");
 	harness.fire("before_agent_start");
 	expect(await harness.fire("tool_call", bashCall)).toMatchObject({ block: true });
 	expect(harness.reviewCalls).toHaveLength(0);
+});
+
+test("explicit scope exit invalidates classifiers, bypasses irrelevant invalid defaults, and requires reengagement", async () => {
+	let settle!: (text: string) => void;
+	const sample = new Promise<string>((resolve) => { settle = resolve; });
+	const key = "uwoacrimson/gpt-5.6-luna";
+	let raw: Record<string, unknown> = { models: { [key]: {} }, defaults: { autoMode: {
+		available: true, reviewerModel: "p/reviewer", evidenceTools: false, classifier: { enabled: true },
+	} } };
+	const h = createHarness({ flagValue: true, loadConfig: () => v2Fixture(raw), classifierResponses: [sample] });
+	h.fire("session_start");
+	await h.fire("tool_call", bashCall);
+	h.fire("tool_result", bashCall);
+	expect(h.classifierCalls).toHaveLength(1);
+	const listed = h.ctx.model;
+	const unlisted = { ...listed, provider: "other" };
+	raw = { models: { [key]: {} }, defaults: { autoMode: { available: "invalid" } } };
+	h.fire("model_select", { model: unlisted });
+	h.ctx.model = unlisted;
+	expect((h.classifierCalls[0]!.signal as AbortSignal).aborted).toBe(true);
+	settle("low");
+	await h.flush();
+	h.fire("before_agent_start");
+	expect(await h.fire("tool_call", bashCall)).toBeUndefined();
+	h.fire("tool_result", bashCall);
+	expect(h.reviewCalls).toHaveLength(1);
+	expect(h.classifierCalls).toHaveLength(1);
+	raw = { models: { [key]: {} }, defaults: { autoMode: { available: true, reviewerModel: "p/reviewer", evidenceTools: false, classifier: { enabled: true } } } };
+	h.fire("model_select", { model: listed });
+	h.ctx.model = listed;
+	h.fire("before_agent_start");
+	expect(await h.fire("tool_call", bashCall)).toBeUndefined();
+	expect(h.reviewCalls).toHaveLength(1);
+	await h.runCommand("on");
+	await h.fire("tool_call", bashCall);
+	expect(h.reviewCalls).toHaveLength(2);
+	// Corrupt scope is not evidence of exclusion and must preserve the gate.
+	raw = { models: null };
+	h.fire("model_select", { model: unlisted });
+	h.ctx.model = unlisted;
+	expect(await h.fire("tool_call", bashCall)).toMatchObject({ block: true });
+	expect(h.reviewCalls).toHaveLength(2);
 });

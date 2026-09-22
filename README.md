@@ -29,7 +29,7 @@ pi install npm:pi-openai-toolkit
 
 Use `--local` to install the extension in the current project. Toolkit policy is still global; there are no project or environment policy overlays.
 
-Without a config file, Remote Compaction v2 is enabled for eligible models, Remote Context windows are off, search is unmanaged, image generation is disabled, and Auto Mode is unavailable. These defaults do not verify backend support.
+Without a config file, Toolkit is inactive and Pi keeps its native behavior. In v2, only exact entries in `models` activate Toolkit, including an empty `{}` entry. `defaults` are shared templates for those listed models; they do not activate any other model. An identically named model under another provider is separate.
 
 The only Toolkit config file is:
 
@@ -50,6 +50,9 @@ You must already be signed in to Pi's built-in `openai-codex` provider. Create o
   "schemaVersion": 2,
   "defaults": {
     "context": { "mode": "remote-windows" }
+  },
+  "models": {
+    "openai-codex/<model-id>": {}
   }
 }
 ```
@@ -60,7 +63,7 @@ Start Pi with a model from your existing Codex catalog:
 pi --model openai-codex/<model-id>
 ```
 
-Replace `<model-id>` with the ID shown by your Pi setup. The session is activated when `new_context`, `get_context_remaining`, `history`, and `notes` appear. This verifies activation, not a completed backend round trip.
+Replace `<model-id>` in both the config and command with the ID shown by your Pi setup. The session is activated when `new_context`, `get_context_remaining`, `history`, and `notes` appear. This verifies activation, not a completed backend round trip.
 
 ### Use a compatible gateway
 
@@ -126,7 +129,18 @@ Earlier windows remain retrievable through `history`, but are not all automatica
 
 ### Continue a session with server-side compaction
 
-Use `context.mode: "remote-compaction"` for the Responses compaction path (the default), or `"pi"` to relinquish Toolkit context management. Set `context.remoteCompaction.model` only when a separate model should produce the checkpoint. These fields belong under `defaults` or an exact `models` override.
+Use `context.mode: "remote-compaction"` for the Responses compaction path (the default for listed models), or `"pi"` to relinquish Toolkit context management. Set `context.remoteCompaction.model` only when a separate model should produce the checkpoint. These fields belong under `defaults` or an exact `models` override. An empty entry opts into the built-in defaults:
+
+```json
+{
+  "schemaVersion": 2,
+  "models": {
+    "your-provider/your-model": {}
+  }
+}
+```
+
+Switching to an unlisted model disables Toolkit hooks and tools, restores third-party search state, and hands context and compaction to Pi without a Toolkit close-out request. Existing persisted history stays intact; opting out cannot recover original content already replaced by a persisted compaction summary or opaque checkpoint. Toolkit does not replay that checkpoint on the inactive path. Returning to a listed model restores its feature availability; Auto Mode requires explicit engagement again.
 
 `context.remoteCompaction.inputSource` defaults to `"legacy"`: first compaction uses Pi's current session context, with event preparation as a last resort; recursion uses the raw branch tail. This preserves existing behavior but can diverge from provider-visible context when other extensions rewrite messages.
 
@@ -134,7 +148,7 @@ Opt into `"pi-context-hook"` to use the ordered Pi context-hook projection. If t
 
 ### Choose a Web Search route
 
-Configure a global default and exact model overrides:
+Configure shared defaults for listed models and exact overrides:
 
 ```json
 {
@@ -159,7 +173,7 @@ Exact overrides win over defaults. There are no patterns, inferred capabilities,
 
 ### Generate an image
 
-Image generation requires a Responses session and may incur provider charges. Enable it globally:
+Image generation requires a listed Responses session and may incur provider charges. Share its output-model policy across listed models:
 
 ```json
 {
@@ -170,13 +184,16 @@ Image generation requires a Responses session and may incur provider charges. En
       "defaultModel": "gpt-image-2.5",
       "allowedModels": ["gpt-image-2.5", "grok-imagine-image-2.0"]
     }
+  },
+  "models": {
+    "my-gateway/gpt-5.6-luna": {}
   }
 }
 ```
 
 These are bare output-model IDs for the nested Responses `image_generation` tool. List order does not choose the default. `defaultModel` must belong to the nonempty `allowedModels` list; an optional one-call `model` must also be allowed. Invalid policy or a disallowed choice fails before authentication, reference upload, and paid dispatch. The provider must support the chosen model.
 
-`openai_generate_image` accepts text-to-image requests and edits using explicitly supplied local references. Image policy cannot be overridden per session model.
+`openai_generate_image` accepts text-to-image requests and edits using explicitly supplied local references. Image output policy cannot be overridden per session model; exposure and execution still require that active model's exact `models` entry. Output-model IDs and producer/reviewer references do not activate chat models.
 
 ### Review tool calls automatically
 
@@ -219,7 +236,7 @@ By default, the toolkit preserves Pi's selected request-level reasoning effort. 
 
 ## Common configuration
 
-The global file uses built-ins, then `defaults`, then exact `models["provider/model-id"]` overrides. Missing fields inherit; arrays replace; `false` and `0` are retained. Supported optional model references accept `null` to clear inheritance. Defaults are not master switches: an exact override can enable a feature whose default is disabled.
+For models explicitly listed in `models`, the global file uses built-ins, then `defaults`, then exact `models["provider/model-id"]` overrides. Missing fields inherit; arrays replace; `false` and `0` are retained. Supported optional model references accept `null` to clear inheritance. Defaults are not master switches: an exact override can enable a feature whose default is disabled.
 
 | Field | Default | Use |
 | --- | --- | --- |
@@ -239,9 +256,11 @@ The global file uses built-ins, then `defaults`, then exact `models["provider/mo
 | `diagnostics.level` | `"info"` | `"debug"` enables debug artifacts. |
 | `diagnostics.captureRequests` / `captureResponses` | `false` | Independent request/compact-response capture opt-ins. |
 
-Use `/toolkit-config` for effective values and origins, `/toolkit-config validate` for document issues, and `/toolkit-config migration-preview` for a read-only legacy candidate. These commands require a UI and perform no network/auth lookup, tool activation, or file writes. Configuration selection does not verify backend support.
+An unversioned legacy file retains its previous global reach. Migration preview preserves explicit legacy model entries even when their overrides equal defaults and flags the narrower v2 reach for review.
 
-Unknown v2 policy keys and malformed values produce visible scoped errors, independent of debug mode. Each public callback or tool execution uses one immutable snapshot across its awaited helpers; later operations reread the file. Separate Pi events are not one atomic transaction. See the [complete configuration reference](docs/configuration.md) and [editor schema](config.schema.json).
+Use `/toolkit-config` for activation scope, effective values and origins, `/toolkit-config validate` for document issues, and `/toolkit-config migration-preview` for a read-only legacy candidate. These commands require a UI and perform no network/auth lookup, tool activation, or file writes. Configuration selection does not verify backend support.
+
+Unknown v2 policy keys and malformed values produce scoped errors. Known unlisted models remain native even if defaults or another model's feature policies are invalid; `/toolkit-config validate` still reports those errors. Unknown or unreadable scope is not an opt-out and preserves fail-closed behavior, including an engaged approval gate. Each public callback or tool execution uses one immutable snapshot across its awaited helpers; later operations reread the file. Separate Pi events are not one atomic transaction. See the [complete configuration reference](docs/configuration.md) and [editor schema](config.schema.json).
 
 ## Development
 

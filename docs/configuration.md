@@ -8,7 +8,7 @@ This reference describes schema v2. Unversioned legacy configuration remains sup
 
 ### Start with a small document
 
-Create the file and parent directory if absent. This example states the shipped feature defaults; it is not a conversion of an existing legacy file:
+Create the file and parent directory if absent. Replace `your-provider/your-model` with an actual Pi model key. This example activates that model with the shipped feature defaults; it is not a conversion of an existing legacy file:
 
 ```json
 {
@@ -24,7 +24,7 @@ Create the file and parent directory if absent. This example states the shipped 
     },
     "autoMode": { "available": false }
   },
-  "models": {},
+  "models": { "your-provider/your-model": {} },
   "diagnostics": {
     "level": "info",
     "notifyOnLoad": false,
@@ -41,13 +41,17 @@ Create the file and parent directory if absent. This example states the shipped 
 
 ### Resolution and errors
 
-Precedence is built-ins, then `defaults`, then `models["provider/model-id"]`. Keys are exact and case-sensitive. Leading/trailing whitespace is trimmed; conflicting normalized keys are rejected. Model IDs may contain further slashes. No pattern matching or endpoint/capability guessing occurs.
+Only an exact entry in `models` activates Toolkit, including an empty `{}` entry. `defaults` are templates for listed models; defaults alone and an empty model map activate nothing. For listed models, precedence is built-ins, then `defaults`, then `models["provider/model-id"]`. Keys are exact and case-sensitive. Leading/trailing whitespace is trimmed; conflicting normalized keys are rejected. Model IDs may contain further slashes. No pattern matching or endpoint/capability guessing occurs.
 
 Known nested objects merge by field. Missing fields inherit, arrays replace instead of append, and `false`/`0` retain their meanings. Only optional model references accept `null`: context producer, native-fallback model, auto reviewer, and classifier model. `null` elsewhere is invalid. Defaults do not prohibit exact overrides; an exact model can set `available: true` over a default of `false`.
 
-A missing file uses independent built-in defaults. Invalid JSON, an unreadable file, missing/unsupported `schemaVersion` on a v2-shaped document, or mixed legacy/v2 fields are reported distinctly. Unknown v2 policy keys are errors in their owning scope. Invalid selected settings block dependent operations; they never silently pick a more permissive route. Errors in other models remain visible without replacing a valid current model's policy. A valid exact leaf may shadow an invalid default leaf, but cannot hide a malformed containing object or unknown field in that feature scope.
+A missing file leaves Toolkit inactive and Pi native. Known unlisted models also remain native, even when defaults or another model's feature settings are invalid; their errors remain available through config inspection. Invalid JSON, an unreadable file, missing/unsupported `schemaVersion` on a v2-shaped document, or mixed legacy/v2 fields are reported distinctly. Unknown v2 policy keys are errors in their owning scope. Invalid selected settings block dependent operations; they never silently pick a more permissive route. Errors in other models remain visible without replacing a valid current model's policy. A valid exact leaf may shadow an invalid default leaf, but cannot hide a malformed containing object or unknown field in that feature scope.
 
 Each public callback, tool execution, compaction, reviewer/classifier operation, or config command uses an immutable snapshot across its awaited helpers. The next operation reads again. This does not make separate Pi headers, payload, and tool events one atomic transaction. Engagement, overrides, scores, windows, and results stay out of the config file.
+
+Switching to an unlisted model disables Toolkit tools, prompts, request/header rewrites, checkpoint replay, context projection, compaction interception and Auto Mode. It restores the original third-party search state and does not request close-out compaction or resolve Toolkit authentication. Reentry restores configured availability, but requires explicit Auto Mode engagement. Unknown membership (such as an unreadable file or malformed `models` map) is not intentional opt-out and keeps an engaged gate fail-closed.
+
+Native context uses Pi's actual persisted history unchanged, including any previous window markers and summaries. Opting out cannot reconstruct original messages already replaced by a persisted compaction; opaque checkpoints are not replayed on the inactive path. No replacement history is fabricated.
 
 ---
 
@@ -55,7 +59,7 @@ Each public callback, tool execution, compaction, reviewer/classifier operation,
 
 `defaults.reasoning.effortOverride` and `models[exact].reasoning.effortOverride` accept a boolean, defaulting to `false`. Exact values override defaults, including `false` over `true`. Only `gpt-6-astra` using exactly `openai-responses` can apply this option; neither `openai-codex-responses` nor other models are eligible.
 
-Enable it only when the gateway supports `configuration_update`. The first request establishes a reasoning-effort baseline; later changes become update items in `input`, retaining the baseline at the top level for caching. When disabled or invalid, Toolkit skips this optional rewrite, preserves Pi's selected effort, and clears old baselines. Model/session switches also clear baselines. Invalid values are reported as scoped reasoning issues; valid exact leaves may shadow invalid default leaves under the normal resolution rules. Codex version headers are independent of this option. This is Toolkit configuration, not Codex `config.toml`.
+Enable it only when the gateway supports `configuration_update`. The first request establishes a reasoning-effort baseline; later changes become update items in `input`, retaining the baseline at the top level for caching. When disabled or invalid, Toolkit skips this optional rewrite, preserves Pi's selected effort, and clears old baselines. Model/session switches also clear baselines. Invalid values are reported as scoped reasoning issues; valid exact leaves may shadow invalid default leaves under the normal resolution rules. Codex version headers are independent of this option but still require active Toolkit scope. This is Toolkit configuration, not Codex `config.toml`.
 
 ---
 
@@ -107,7 +111,7 @@ A successfully registered `web_run` absent from the host's published catalog is 
 
 ### Images
 
-Image settings are global-only under `defaults.imageGeneration`. `enabled` defaults to `false`. `defaultModel` defaults to `"gpt-image-2.5"`; `allowedModels` defaults to `["gpt-image-2.5"]`.
+Image output settings are global-only under `defaults.imageGeneration`, shared by explicitly listed active models. Tool exposure and execution require active Toolkit scope. `enabled` defaults to `false`. `defaultModel` defaults to `"gpt-image-2.5"`; `allowedModels` defaults to `["gpt-image-2.5"]`.
 
 These are bare output-model IDs, not active-session model keys. Each normalized ID must contain 1-256 characters. The allowed list must remain nonempty after normalization and contain the explicit default. Order has no default-selection meaning. A caller's one-call `model` must be a member; policy and membership are checked before auth, local-reference preparation/upload, and paid dispatch. The active session remains the Responses routing model. Config does not grant permission to upload arbitrary local files or imply that a provider supports a particular image model.
 
@@ -141,7 +145,7 @@ Reviewer and classifier references are not active-session overrides. Classifier 
 
 ### Diagnostics and inspection
 
-Diagnostics are plugin-wide, not model-scoped.
+Diagnostics are configured plugin-wide. Inactive models emit no feature diagnostics or request captures; config commands remain available.
 
 | Field | Default | Contract |
 | --- | --- | --- |
@@ -152,7 +156,7 @@ Diagnostics are plugin-wide, not model-scoped.
 | `redactSensitiveData` | `true` | Optional additional redaction. Critical credentials, account IDs, and opaque encrypted data are always redacted. |
 | `artifactRoot` | `"~/.pi/agent/artifacts/pi-openai-toolkit/compaction"` | Relative paths resolve against the canonical config directory, not the current project. |
 
-`/toolkit-config` (or `show`) displays effective values with built-in/default/exact/legacy origins. `/toolkit-config validate` reports document issues, including unrelated model entries. Reports are bounded and redacted; unknown field names are masked. Repeated issue notifications are deduplicated within a session and do not depend on compaction enablement or debug mode.
+`/toolkit-config` (or `show`) displays activation scope and effective values with built-in/default/exact/legacy/inactive origins. `/toolkit-config validate` reports document issues, including unrelated model entries. Reports are bounded and redacted; unknown field names are masked. Repeated issue notifications are deduplicated within a session and do not depend on compaction enablement or debug mode.
 
 `/toolkit-config migration-preview` analyzes a legacy file without changing it. These are human commands using Pi's UI; no model tool, new headless stdout protocol, network probe, auth lookup, tool mutation, or persistent state write is added. Headless operation failures and typed resolution issues remain observable. A truncated candidate is not usable JSON.
 
@@ -162,7 +166,7 @@ Diagnostics are plugin-wide, not model-scoped.
 
 Do not combine unversioned roots (`compaction`, `webSearch`, `imageGeneration`, `autoMode`, `reasoning_effort_override`) with `schemaVersion: 2`. Valid legacy behavior is retained through a compatibility adapter, including nullable model clears, legacy image-list defaults, and source-dependent hosted-search failure handling. Invalid selected legacy route values are now blocked instead of disappearing into another selection.
 
-The preview maps recognized fields into a candidate, supplies leaf origins, lists unmapped/dormant paths, and reports `ready`, `needs-review`, `already-v2`, or `unavailable`. `ready` means no known semantic difference was found in recognized active policy; it is not authorization to apply or proof of provider support. Unknown names are masked and their values are never copied into the report. The original source bytes remain the authoritative copy of unknown and dormant content.
+The preview maps recognized fields into a candidate, supplies leaf origins, lists unmapped/dormant paths, and reports `needs-review`, `already-v2`, or `unavailable`. Legacy candidates require review because v2 changes activation reach: only explicit model entries receive shared defaults. Every recognized legacy model key is retained, even when its override is empty or equal to defaults. Output-model IDs and producer/reviewer references do not become activation entries. Unknown names are masked and their values are never copied into the report. The original source bytes remain the authoritative copy of unknown and dormant content.
 
 | Legacy input | v2 destination |
 | --- | --- |
@@ -180,6 +184,7 @@ The preview maps recognized fields into a candidate, supplies leaf origins, list
 
 The preview cannot claim universal lossless conversion:
 
+- Legacy global/default policies, including image generation and compaction, no longer reach unlisted models. List each intended active provider/model explicitly; no finite list can preserve unrestricted legacy global reach.
 - A legacy hosted allowlist ignores unsupported APIs and malformed payloads; explicit v2 hosted selection fails closed. Moving a list entry to an exact hosted route changes those failure paths.
 - Disabled legacy features can retain dormant model lists/routes. A simplified v2 policy cannot preserve enable-later intent without review.
 - Gateway compatibility is now shared independently of context mode; review effects on compaction and image affinity.

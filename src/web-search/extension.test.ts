@@ -894,7 +894,7 @@ test("invalid selected v2 search cannot leak local/standalone tools or dispatch 
 	expect(h.handlers.get("tool_call")!({ toolName: "web_search" }, h.ctx)).toMatchObject({ block: true });
 	await expect(h.registered[0].execute("id", { search_query: [{ q: "fixture" }] }, undefined, undefined, h.ctx)).rejects.toThrow("configuration is invalid");
 	expect(h.searchCalls).toHaveLength(0);
-	raw = { defaults: { webSearch: { route: "hosted" } }, models: { "other/model": { webSearch: { route: "typo" } } } };
+	raw = { defaults: { webSearch: { route: "hosted" } }, models: { "gateway/gpt-6-astra": {}, "other/model": { webSearch: { route: "typo" } } } };
 	const payload = h.handlers.get("before_provider_request")!({ payload: { input: [], tools: [] } }, h.ctx) as { tools: unknown[] };
 	expect(payload.tools).toEqual([{ type: "web_search" }]);
 });

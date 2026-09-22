@@ -226,7 +226,6 @@ export class ContextManagementToolController {
 		promptGuidelines?: string[];
 	}>();
 	private registered = false;
-	private verifiedOnce = false;
 
 	constructor(private readonly pi: ExtensionAPI) {}
 
@@ -249,7 +248,6 @@ export class ContextManagementToolController {
 
 		this.registeredNames.clear();
 		this.definitions.clear();
-		this.verifiedOnce = false;
 		for (const definition of definitions) {
 			this.registeredNames.add(definition.name);
 			this.definitions.set(definition.name, {
@@ -264,18 +262,13 @@ export class ContextManagementToolController {
 	}
 
 	/**
-	 * Read registration state until the runtime confirms publication.
-	 *
-	 * Pi 0.86 can reject action methods while a session replacement is still
-	 * binding, and can publish the registry after `session_start` ran. Negative
-	 * reads remain retryable; only a successful verification is cached for this
-	 * controller instance. A Pi reload creates a new controller.
+	 * Recheck publication, including after a previously successful verification.
+	 * Pi can publish a dynamic same-name replacement at any time. Unbound and
+	 * partial catalogs remain retryable; neither positive nor negative reads
+	 * establish permanent ownership.
 	 */
 	checkRegistration(): ContextToolRegistrationState {
 		if (!this.registered) return "conflict";
-		// A confirmed publication is kept: the expensive part was never the read, it
-		// was trusting a failed one. Only negative verdicts are recomputed each time.
-		if (this.verifiedOnce) return "verified";
 		let available: PublishedTool[];
 		try {
 			const api = this.pi as ExtensionAPI & { getAllTools?: () => PublishedTool[] };
@@ -299,25 +292,31 @@ export class ContextManagementToolController {
 		}
 		if (conflict) return "conflict";
 		if (missing) return "unverified";
-		this.verifiedOnce = true;
 		return "verified";
 	}
 
 	sync(active: boolean): ContextToolSyncResult {
 		const registrationState = this.checkRegistration();
-		if (registrationState !== "verified") return { synced: false, registrationState };
+		if (active && registrationState !== "verified") return { synced: false, registrationState };
 		const api = this.pi as ExtensionAPI & { getActiveTools?: () => string[]; setActiveTools?: (names: string[]) => void };
 		if (typeof api.getActiveTools !== "function" || typeof api.setActiveTools !== "function") {
 			return { synced: false, registrationState };
 		}
 		try {
 			const current = api.getActiveTools();
-			// Pi may activate a newly registered tool before the first sync. Once
-			// registration is verified, every registered name belongs to this
-			// controller: active models get all four, inactive models get none.
+			// Host allowlists can publish only part of our registration. Opt-out
+			// must still remove those owned tools without touching foreign names.
+			const owned = registrationState === "verified" ? this.registeredNames : new Set(
+				this.pi.getAllTools().filter((tool) => {
+					const expected = this.definitions.get(tool.name);
+					return expected !== undefined && isOurTool(tool, expected);
+				}).map((tool) => tool.name),
+			);
+			// Pi may activate a newly registered tool before the first sync. The
+			// current catalog check establishes ownership for this sync only.
 			const next = active
 				? [...current, ...[...this.registeredNames].filter((name) => !current.includes(name))]
-				: current.filter((name) => !this.registeredNames.has(name));
+				: current.filter((name) => !owned.has(name));
 			if (next.length !== current.length) api.setActiveTools(next);
 			return { synced: true, registrationState };
 		} catch {

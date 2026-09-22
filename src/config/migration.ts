@@ -4,7 +4,7 @@ import type { ConfigOrigin } from "./policy";
 import { resolveV2Config } from "./v2";
 
 export type MigrationPreview = {
-	status: "ready" | "needs-review" | "already-v2" | "unavailable";
+	status: "needs-review" | "already-v2" | "unavailable";
 	candidate?: Record<string, unknown>;
 	/** Controlled explanations, never arbitrary raw input values. */
 	reasons: string[];
@@ -47,8 +47,9 @@ export function previewToolkitMigration(loaded: LoadedToolkitConfig): MigrationP
 		if (resolved.policy.webSearch.route !== defaults.webSearch.route) override.webSearch = resolved.policy.webSearch;
 		if (resolved.policy.autoMode.available !== defaults.autoMode.available) override.autoMode = { available: resolved.policy.autoMode.available };
 		if (resolved.policy.compatibility.transport !== "standard") override.compatibility = resolved.policy.compatibility;
+		// Even an empty override is an activation grant in v2.
+		models[key] = override;
 		if (Object.keys(override).length > 0) {
-			models[key] = override;
 			for (const [feature, fields] of Object.entries(override)) {
 				for (const field of Object.keys(fields as Record<string, unknown>)) {
 					const leaf = `${feature}.${field}`;
@@ -58,7 +59,9 @@ export function previewToolkitMigration(loaded: LoadedToolkitConfig): MigrationP
 		}
 	}
 	const candidate = { schemaVersion: 2, defaults, models, diagnostics };
-	const reasons: string[] = [];
+	const reasons: string[] = [
+		"V2 activates Toolkit only for explicit models entries, including empty entries. Unlisted models become native Pi; legacy global context, reasoning, search defaults and image behavior no longer reach them. Review the model list before applying.",
+	];
 	if (loaded.warnings.length || baseline.issues.length) {
 		reasons.push("Legacy warnings, unknown fields or normalized invalid values require review. Their original contents remain in the untouched source file.");
 	}
@@ -91,10 +94,10 @@ export function previewToolkitMigration(loaded: LoadedToolkitConfig): MigrationP
 	const candidateChecks = [resolveV2Config(candidate, undefined), ...[...keys].map((key) => resolveV2Config(candidate, key))];
 	if (candidateChecks.some((resolved) => resolved.issues.length)) reasons.push("The candidate has v2 validation issues; it cannot be applied as-is.");
 	return {
-		status: reasons.length ? "needs-review" : "ready",
+		status: "needs-review",
 		candidate,
 		origins,
 		unmappedPaths: [...unmappedPaths],
-		reasons: reasons.length ? reasons : ["Recognized active policies map without a known semantic difference. Preview only; no source file was changed."],
+		reasons,
 	};
 }

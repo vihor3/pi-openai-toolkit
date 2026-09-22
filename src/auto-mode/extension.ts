@@ -164,6 +164,15 @@ export function registerAutoModeExtension(
 
 	function readConfig(ctx: ExtensionContext, model = ctx.model): ResolvedToolkitConfig {
 		const resolved = resolveToolkitConfig(loadConfig(), model);
+		if (resolved.scope === "inactive") {
+			runtime.engaged = false;
+			invalidateClassification();
+			resetRejectionBreaker(breaker);
+			setGateOverride(runtime, resolved.config.autoMode, undefined);
+			callIndex = 0;
+			toolReviewRenderer.clear();
+			updateStatus(ctx);
+		}
 		notifyConfigIssues(ctx, resolved);
 		return resolved;
 	}
@@ -447,6 +456,7 @@ export function registerAutoModeExtension(
 		const { config } = resolved;
 		toolReviewRenderer.clear();
 		if (
+			resolved.scope !== "inactive" &&
 			!toolReviewRenderer.supported &&
 			!toolReviewRendererWarningShown &&
 			ctx.hasUI &&
@@ -464,7 +474,7 @@ export function registerAutoModeExtension(
 		resetRejectionBreaker(breaker);
 		callIndex = 0;
 		const requestedFromFlag = pi.getFlag(AUTO_MODE_FLAG) === true;
-		const startedFromFlag = requestedFromFlag && (resolved.invalidFeatures.includes("autoMode") ? (runtime.engaged = true) : engage(ctx, config.autoMode));
+		const startedFromFlag = resolved.scope !== "inactive" && requestedFromFlag && (resolved.invalidFeatures.includes("autoMode") ? (runtime.engaged = true) : engage(ctx, config.autoMode));
 		if (startedFromFlag && event.reason === "startup" && ctx.mode === "tui") {
 			ctx.ui.notify(`Auto mode on. Reviewing: ${describeGate(runtime)}`, "info");
 		}

@@ -52,7 +52,7 @@ import {
 	removeNativeCompactionRetainedMessages,
 	serializeLiveTailToResponsesInput,
 } from "./payload-rewrite";
-import { getCompactionRequestExtras, rememberRequestContext } from "./request-context-cache";
+import { clearRequestContextCache, getCompactionRequestExtras, rememberRequestContext } from "./request-context-cache";
 import { resolveWebSearchRoute } from "./web-search/types";
 import { executeRemoteV2Compaction } from "./remote-v2-client";
 import {
@@ -87,6 +87,7 @@ type CompactionContextProjection = (
 function contextOperation(loadConfig: typeof loadToolkitConfig, ctx: ExtensionContext, model = ctx.model): ResolvedToolkitConfig {
 	const loaded = loadConfig();
 	const resolved = resolveToolkitConfig(loaded, model);
+	if (resolved.scope === "inactive") clearRequestContextCache();
 	notifyConfigIssues(ctx, resolved);
 	return resolved;
 }
@@ -566,6 +567,7 @@ async function handleSessionBeforeCompact(
 	remoteContextActive: RemoteContextActive,
 ) {
 	const resolved = contextOperation(dependencies.loadConfig, ctx);
+	if (resolved.scope === "inactive") return undefined;
 	if (resolved.invalidFeatures.some((feature) => ["context", "compatibility", "diagnostics"].includes(feature))) return { cancel: true };
 	const config = resolved.config.compaction;
 	if (!config.enabled) {
@@ -784,6 +786,7 @@ async function handleWindowBulk(
 	trigger: "model-switch" | "turn-end",
 	resolved = contextOperation(loadConfig, ctx),
 ): Promise<void> {
+	if (resolved.scope === "inactive") return;
 	requireContextPolicy(resolved, ctx);
 	const compaction = resolved.config.compaction;
 	if (!compaction.enabled || compaction.contextManagement !== "remote") return;
@@ -846,6 +849,9 @@ async function handleContextInternal(
 	remoteContextActive: RemoteContextActive,
 ) {
 	const resolved = contextOperation(loadConfig, ctx);
+	// Scope opt-out hands Pi its actual history, including prior persisted summaries.
+	// Do not filter window markers or replay opaque checkpoints on this path.
+	if (resolved.scope === "inactive") return undefined;
 	requireContextPolicy(resolved, ctx);
 	const config = resolved.config.compaction;
 	if (!config.enabled) {
@@ -964,6 +970,7 @@ async function handleBeforeProviderRequest(
 	remoteContextActive: RemoteContextActive,
 ) {
 	const resolved = contextOperation(loadConfig, ctx);
+	if (resolved.scope === "inactive") return undefined;
 	requireContextPolicy(resolved, ctx);
 	const toolkitConfig = resolved.config;
 	const config = toolkitConfig.compaction;
@@ -1190,6 +1197,7 @@ export default function registerCompactionExtension(
 		contextWindows,
 		async (ctx) => {
 			const resolved = contextOperation(dependencies.loadConfig, ctx);
+			if (resolved.scope === "inactive") return { active: false, gatewayModels: [] };
 			assertConfigValid(resolved, "context", "compatibility");
 			return { active: await isContextRuntimeActive(ctx, resolved.config.compaction), gatewayModels: resolved.gatewayModelKeys };
 		},
@@ -1205,7 +1213,7 @@ export default function registerCompactionExtension(
 		// identity make a failed activation look usable.
 		contextWindowReady = false;
 		const config = resolved.config.compaction;
-		const eligible = !resolved.invalidFeatures.some((feature) => ["context", "compatibility"].includes(feature)) && await isRemoteContextActive(ctx, config, model);
+		const eligible = resolved.scope === "active" && !resolved.invalidFeatures.some((feature) => ["context", "compatibility"].includes(feature)) && await isRemoteContextActive(ctx, config, model);
 		const toolSync = tools.sync(eligible);
 		const outcome: ContextToolSyncOutcome = {
 			eligible,
@@ -1295,6 +1303,7 @@ export default function registerCompactionExtension(
 	pi.on("session_before_compact", (event, ctx) => handleSessionBeforeCompact(event, ctx, dependencies, remoteContextActive));
 	pi.on("session_compact", (event, _ctx) => contextWindows.recordCompaction(event.compactionEntry.details));
 	pi.on("session_shutdown", () => {
+		clearRequestContextCache();
 		contextWindowReady = false;
 		contextWindows.reset();
 		tools.reset();
@@ -1305,6 +1314,7 @@ export default function registerCompactionExtension(
 		await handleWindowBulk(ctx, contextWindows, dependencies.loadConfig, "turn-end");
 	});
 	pi.on("model_select", async (event, ctx) => {
+		clearRequestContextCache();
 		// Switching into a covered model mid-session must open the window
 		// lifecycle immediately: without an identity the request rewrite skips
 		// window metadata, the backend never ingests those turns, and the first
@@ -1316,12 +1326,17 @@ export default function registerCompactionExtension(
 		// session is idle here, so the close-out must happen now rather than mid-turn.
 		await handleWindowBulk(ctx, contextWindows, dependencies.loadConfig, "model-switch", resolved);
 	});
+	pi.on("session_tree", async (_event, ctx) => {
+		clearRequestContextCache();
+		await syncTools(ctx, ctx.model, { notifyWindowFailure: true });
+	});
 	pi.on("before_agent_start", async (_event, ctx) => {
 		await syncTools(ctx, ctx.model, { notifyWindowFailure: true });
 	});
 	pi.on("before_provider_request", (event, ctx) => handleBeforeProviderRequest(event, ctx, dependencies.loadConfig, contextWindows, remoteContextActive));
 	pi.on("before_provider_headers", async (event, ctx) => {
 		const resolved = contextOperation(dependencies.loadConfig, ctx);
+		if (resolved.scope === "inactive") return;
 		requireContextPolicy(resolved, ctx);
 		const config = resolved.config.compaction;
 		if (!isCodexContextModel(ctx.model, config)) return;
@@ -1365,6 +1380,7 @@ export default function registerCompactionExtension(
 	});
 	pi.on("message_end", async (event, ctx) => {
 		const resolved = contextOperation(dependencies.loadConfig, ctx);
+		if (resolved.scope === "inactive") return;
 		requireContextPolicy(resolved, ctx);
 		const config = resolved.config.compaction;
 		if (!isCodexContextModel(ctx.model, config) || !tools.isRegistered) return undefined;

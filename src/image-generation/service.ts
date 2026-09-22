@@ -1,5 +1,5 @@
 import { getAgentDir, type ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { assertConfigValid, loadToolkitConfig, resolveToolkitConfig } from "../config";
+import { assertConfigValid, loadToolkitConfig, resolveToolkitConfig, type ResolvedToolkitConfig } from "../config";
 import { notifyConfigIssues } from "../config/notifications";
 import { resolveResponsesEnvironment } from "../runtime";
 import {
@@ -131,11 +131,13 @@ export function createImageGenerationExecutor(
 	toolCallId: string;
 	signal?: AbortSignal;
 	ctx: ExtensionContext;
+	/** Captured by the registered tool so validation and dispatch share one snapshot. */
+	resolvedConfig?: ResolvedToolkitConfig;
 }) => Promise<ImageGenerationExecutionResult> {
 	return async (args) => {
 		const params = normalizeGenerateImageParams(args.params);
 		throwIfAborted(args.signal);
-		const resolved = resolveToolkitConfig(deps.loadConfig(), args.ctx.model);
+		const resolved = args.resolvedConfig ?? resolveToolkitConfig(deps.loadConfig(), args.ctx.model);
 		notifyConfigIssues(args.ctx, resolved);
 		assertConfigValid(resolved, "imageGeneration", "compatibility");
 		const { config } = resolved;

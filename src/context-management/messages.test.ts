@@ -5,7 +5,7 @@ import {
 	preserveSystemHead,
 	renderContextWindowMessage,
 } from "./messages";
-import type { ContextWindowIdentity, NotesCheckpointReceipt } from "./types";
+import { isCodexContextManagementMessageDetails, type ContextWindowIdentity, type NotesCheckpointReceipt } from "./types";
 
 function marker(windowId: string): unknown {
 	return {
@@ -31,6 +31,18 @@ const checkpoint: NotesCheckpointReceipt = {
 	path: "/active-task.md",
 	toolCallId: "notes-call",
 };
+
+test("reentry metadata is optional, window-only and cannot request a trim", () => {
+	const details = (marker("w1") as { details: any }).details;
+	expect(isCodexContextManagementMessageDetails(details)).toBe(true);
+	const withContext = (extra: Record<string, unknown>) => ({ ...details, contextManagement: { ...details.contextManagement, ...extra } });
+	expect(isCodexContextManagementMessageDetails(withContext({ preservePriorContext: true }))).toBe(true);
+	for (const extra of [
+		{ preservePriorContext: false }, { preservePriorContext: "true" },
+		{ preservePriorContext: true, kind: "reminder" },
+		{ preservePriorContext: true, trimPreviousWindow: true },
+	]) expect(isCodexContextManagementMessageDetails(withContext(extra))).toBe(false);
+});
 
 test("initial context guidance keeps the rollover instructions pre-rollover", () => {
 	const content = renderContextWindowMessage({

@@ -283,7 +283,7 @@ test("v2 explicit image default is independent of list order and stable across a
 	const probe = modelProbeDeps(undefined);
 	const raw = { defaults: { imageGeneration: { enabled: true, defaultModel: "second", allowedModels: ["first", "second"] } } };
 	let reads = 0;
-	probe.deps.loadConfig = () => { reads++; return v2Fixture(raw); };
+	probe.deps.loadConfig = () => { reads++; return v2Fixture(raw, ["newapi/gpt-5.5"]); };
 	const original = probe.deps.resolveRuntime;
 	probe.deps.resolveRuntime = async (...args) => {
 		raw.defaults.imageGeneration.defaultModel = "first";
@@ -298,10 +298,21 @@ test("v2 explicit image default is independent of list order and stable across a
 	expect(reads).toBe(2);
 });
 
+test("unlisted image service calls fail before auth, references, output preparation or paid requests", async () => {
+	const probe = modelProbeDeps(undefined);
+	probe.deps.loadConfig = () => v2Fixture({ models: { "other/gpt-5.5": {} }, defaults: { imageGeneration: { enabled: true } } });
+	probe.deps.resolveRuntime = async () => { throw new Error("unexpected auth"); };
+	probe.deps.prepareReferences = async () => { throw new Error("unexpected references"); };
+	probe.deps.prepareOutput = async () => { throw new Error("unexpected output"); };
+	await expect(createImageGenerationExecutor(probe.deps)({ params: { prompt: "draw" }, toolCallId: "stale", ctx: context() }))
+		.rejects.toThrow("not enabled for the current provider/model-id");
+	expect(probe.calls.dispatched).toBe(false);
+});
+
 test("v2 invalid image default and disallowed override fail before auth, uploads and paid work", async () => {
 	for (const [defaultModel, requestedModel] of [["missing", null], ["first", "missing"]]) {
 		const probe = modelProbeDeps(undefined);
-		probe.deps.loadConfig = () => v2Fixture({ defaults: { imageGeneration: { enabled: true, defaultModel, allowedModels: ["first"] } } });
+		probe.deps.loadConfig = () => v2Fixture({ defaults: { imageGeneration: { enabled: true, defaultModel, allowedModels: ["first"] } } }, ["newapi/gpt-5.5"]);
 		probe.deps.resolveRuntime = async () => { throw new Error("must not resolve auth"); };
 		probe.deps.prepareReferences = async () => { throw new Error("must not upload"); };
 		const execute = createImageGenerationExecutor(probe.deps);

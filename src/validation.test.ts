@@ -427,6 +427,7 @@ async function loadHookHarness(options: HookHarnessOptions = {}): Promise<{
 		"session_shutdown",
 		"agent_settled",
 		"model_select",
+		"session_tree",
 		"before_agent_start",
 		"before_provider_request",
 		"before_provider_headers",
